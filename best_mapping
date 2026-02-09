@@ -1,0 +1,43 @@
+import sys, pickle
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Patch for pickles referencing numpy._core
+sys.modules['numpy._core'] = np
+
+path = "/Users/lindyzhang/Downloads/ALFA_Lab_UROP/eval_results_dataset1_candidates_top5000_cwe-cve_multiprompt.pkl"
+
+def get_best_mappings():
+    with open(path, "rb") as f:
+        raw = pickle.load(f)
+    df = pd.DataFrame(raw)
+
+    # 1. Sort by Score (descending) and then by Latency (ascending) as a tie-breaker
+    df_sorted = df.sort_values(by=['gemma3_12b_v3_avg', 'gemma3_12b_v3_latency'], ascending=[False, True])
+
+    # 2. Keep only the top 1 CWE for each CVE (target_id)
+    best_mappings = df_sorted.drop_duplicates(subset=['target_id']).copy()
+
+    print(f"--- Deduplication Results ---")
+    print(f"Original Candidate Pairs: {len(df)}")
+    print(f"Unique CVEs Processed: {len(best_mappings)}")
+
+    high_conf = best_mappings[best_mappings['gemma3_12b_v3_avg'] >= 9.0]
+    print(f"CVEs with a High-Confidence Match (>= 9.0): {len(high_conf)}")
+
+    # 3. Plotting safely
+    plt.figure(figsize=(8, 5))
+    counts, bins = np.histogram(best_mappings['gemma3_12b_v3_avg'], bins=11)
+    plt.bar(bins[:-1], counts, width=0.8, color='purple', edgecolor='black')
+    plt.title("Score Distribution (Top Match Per CVE)")
+    plt.xlabel("Score (0-10)")
+    plt.ylabel("Number of CVEs")
+    plt.savefig("best_mapping_distribution.png")
+    print("Graph saved as 'best_mapping_distribution.png'")
+    plt.show()
+    
+    return best_mappings
+
+if __name__ == "__main__":
+    best_mappings_df = get_best_mappings()

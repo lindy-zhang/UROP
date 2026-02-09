@@ -1,0 +1,90 @@
+import sys, pickle, json, glob
+import numpy as np
+import pandas as pd
+
+# Standard patch
+sys.modules['numpy._core'] = np
+
+# Update this path to where you saved the unzipped JSONs
+folder_path = "/Users/lindyzhang/Downloads/ALFA_Lab_UROP/"
+pkl_path = folder_path + "eval_results_dataset1_candidates_top5000_cwe-cve_multiprompt.pkl"
+
+# NVD Data Extraction
+# Digs through the layers of the JSON to find two specific items: the CVE ID and the CWE ID associated with it
+# Puts them into a clean table (DataFrame) so we can use them for math
+def load_all_nvd_json_files(directory):
+    # This finds any file starting with 'nvdcve-2.0-' and ending in '.json'
+    file_list = glob.glob(directory + "nvdcve-2.0-*.json")
+    all_nvd_mappings = []
+    
+    if not file_list:
+        print("ERROR: No NVD JSON files found in the folder!")
+        return pd.DataFrame()
+
+    for file_path in file_list:
+        print(f"Loading {file_path}...")
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+            for item in data.get('vulnerabilities', []):
+                cve_id = item['cve']['id']
+                weaknesses = item['cve'].get('weaknesses', [])
+                for weak in weaknesses:
+                    for desc in weak.get('description', []):
+                        value = desc.get('value')
+                        if value and value.startswith('CWE-'):
+                            all_nvd_mappings.append({'target_id': cve_id, 'nvd_cwe': value})
+    
+    return pd.DataFrame(all_nvd_mappings)
+
+def run_comparison():
+    # 1. Load LLM Data
+    print("Loading LLM Pickle data...")
+    with open(pkl_path, "rb") as f:
+        df = pd.DataFrame(pickle.load(f))
+    df_sorted = df.sort_values(by=['gemma3_12b_v3_avg', 'gemma3_12b_v3_latency'], ascending=[False, True])
+    best_mappings = df_sorted.drop_duplicates(subset=['target_id']).copy()
+
+    # 2. Load ALL NVD Data
+    nvd_df = load_all_nvd_json_files(folder_path)
+    
+    # 3. Clean IDs for matching
+    best_mappings['target_id'] = best_mappings['target_id'].astype(str).str.strip().str.upper()
+    nvd_df['target_id'] = nvd_df['target_id'].astype(str).str.strip().str.upper()
+
+    # 4. Merge
+    # Use pd.merge to find the CVEs that exist in both the AI results and the NVD files
+    # This allows us to ignore data that isn't comparable
+    comparison = pd.merge(best_mappings, nvd_df, on='target_id', how='inner')
+    
+    print(f"\n--- Results ---")
+    print(f"Unique CVEs in LLM Data: {len(best_mappings)}")
+    print(f"Unique CVEs in NVD Files: {nvd_df['target_id'].nunique()}")
+    print(f"Overlap Found: {len(comparison)}")
+
+    if len(comparison) > 0:
+        comparison['is_exact_match'] = comparison['source_id'] == comparison['nvd_cwe']
+        match_perc = (comparison['is_exact_match'].sum() / len(comparison)) * 100
+        print(f"Exact Match Accuracy: {match_perc:.2f}%")
+        
+        # Save discrepancies
+        mismatches = comparison[~comparison['is_exact_match']].copy()
+        mismatches.to_csv(folder_path + "llm_nvd_discrepancies.csv", index=False)
+        print(f"Saved {len(mismatches)} discrepancies to CSV.")
+    else:
+        print("Still no overlap. Check if your LLM data contains the same years as your JSON files.")
+
+if __name__ == "__main__":
+    run_comparison()
+    
+    # Load the discrepancies you just saved
+    mismatches = pd.read_csv("/Users/lindyzhang/Downloads/ALFA_Lab_UROP/llm_nvd_discrepancies.csv")
+
+    # Use 'source_id' because that's what was saved to the CSV
+    # (Unless you renamed it during the .to_csv step)
+    if 'llm_predicted_cwe' not in mismatches.columns:
+        mismatches['disagreement_pair'] = mismatches['nvd_cwe'] + " -> " + mismatches['source_id']
+    else:
+        mismatches['disagreement_pair'] = mismatches['nvd_cwe'] + " -> " + mismatches['llm_predicted_cwe']
+
+    print("\n--- Most Common Disagreement Pairs ---")
+    print(mismatches['disagreement_pair'].value_counts().head(15))

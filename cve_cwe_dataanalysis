@@ -1,0 +1,54 @@
+import sys, pickle
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# This file is mostly just for visualizing the results from the dataset (basically the same graph as slideshow)
+
+# Patch for pickles referencing numpy._core
+sys.modules['numpy._core'] = np
+
+# File path
+path = "/Users/lindyzhang/Downloads/ALFA_Lab_UROP/eval_results_dataset1_candidates_top5000_cwe-cve_multiprompt.pkl"
+
+def run_analysis():
+    with open(path, "rb") as f:
+        raw = pickle.load(f)
+
+    df = pd.DataFrame(raw)
+
+    # Column mappings
+    score_col = 'gemma3_12b_v3_avg'
+    latency_col = 'gemma3_12b_v3_latency'
+    cwe_col = 'source_id'
+
+    print(f"--- Raw Data Analysis ---")
+    print(f"Total rows (candidates): {len(df)}")
+    print(f"Unique CWEs tested: {df[cwe_col].nunique()}")
+
+    # Calculate the "Perfect 10" anomaly
+    perfect_10s = df[df[score_col] == 10.0]
+    print(f"Number of perfect 10s: {len(perfect_10s)}")
+
+    top_magnets = perfect_10s[cwe_col].value_counts().head(10)
+    print("\nTop 10 CWEs causing '10' score inflation:")
+    print(top_magnets)
+
+    # Dual Visualization
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+    ax1.hist(df[score_col], bins=11, color='skyblue', edgecolor='black')
+    ax1.set_title("Distribution of Raw LLM Scores (0-10)")
+    ax1.set_xlabel("Score")
+    ax1.set_ylabel("Count")
+
+    ax2.hist(df[latency_col], bins=50, color='salmon', edgecolor='black')
+    ax2.set_title("Gemma 3 Latency Distribution")
+    ax2.set_xlabel("Seconds")
+    ax2.set_ylabel("Count")
+
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    run_analysis()
